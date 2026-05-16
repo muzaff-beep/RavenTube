@@ -2,7 +2,6 @@
 import json, os, subprocess, sys, glob, shutil, time, re
 from pathlib import Path
 
-# Load JSON config
 with open("download.json", "r", encoding="utf-8") as f:
     data = json.load(f)
 
@@ -14,10 +13,9 @@ password = settings.get("password", "")
 
 urls = data.get("videos", [])
 if not urls:
-    print("No video URLs in download.json. Exiting.")
+    print("No videos in JSON. Exiting.")
     sys.exit(0)
 
-# Quality format
 if mp3 or quality == "audio":
     fmt = "bestaudio/best"
     is_audio = True
@@ -28,7 +26,7 @@ else:
     try:
         h = int(quality)
         fmt = f"bestvideo[height<={h}]+bestaudio/best[height<={h}]"
-    except ValueError:
+    except:
         fmt = "bestvideo+bestaudio/best"
     is_audio = False
 
@@ -47,7 +45,6 @@ for idx, url in enumerate(urls, 1):
     tmp = f"tmp_{idx}"
     os.makedirs(tmp, exist_ok=True)
 
-    # Base command (deno runtime always included)
     base_cmd = [
         "yt-dlp",
         "--no-playlist",
@@ -67,26 +64,22 @@ for idx, url in enumerate(urls, 1):
 
     base_cmd += ["--format", fmt]
 
-    # Try multiple client / proxy combinations
     methods = [
-        # With WARP proxy
         ["--proxy", "socks5://127.0.0.1:1080", "--extractor-args", "youtube:player_client=web"],
         ["--proxy", "socks5://127.0.0.1:1080", "--extractor-args", "youtube:player_client=ios"],
         ["--proxy", "socks5://127.0.0.1:1080", "--extractor-args", "youtube:player_client=android"],
-        # Without proxy (fallback)
         ["--extractor-args", "youtube:player_client=ios"],
         ["--extractor-args", "youtube:player_client=android"],
         ["--extractor-args", "youtube:player_client=web"],
         ["--extractor-args", "youtube:player_client=mweb"],
-        [],  # pure default
+        []
     ]
 
     success = False
     for method in methods:
         cmd = base_cmd + method + [url]
         print("Trying:", " ".join(method) if method else "no extra args")
-        result = subprocess.run(cmd)
-        if result.returncode == 0:
+        if subprocess.run(cmd, cwd=tmp).returncode == 0:
             success = True
             break
         time.sleep(3)
@@ -96,11 +89,9 @@ for idx, url in enumerate(urls, 1):
         shutil.rmtree(tmp)
         continue
 
-    # Clean up partials
     for f in glob.glob(f"{tmp}/*.part"):
         os.remove(f)
 
-    # Find media file
     media_file = None
     for f in os.listdir(tmp):
         if f.endswith((".mp4", ".webm", ".mkv", ".mp3")):
@@ -120,7 +111,6 @@ for idx, url in enumerate(urls, 1):
     folder_path = Path("videos") / folder
     folder_path.mkdir(parents=True, exist_ok=True)
 
-    # Thumbnail
     thumb = None
     for tf in glob.glob(f"{tmp}/*.jpg"):
         thumb = tf
@@ -131,7 +121,6 @@ for idx, url in enumerate(urls, 1):
     file_size = os.path.getsize(media_file)
     size_mb = round(file_size / (1024 * 1024), 2)
 
-    # Zip or copy
     if file_size > split_bytes:
         split_flag = True
         zip_base = folder_path / safe_name
@@ -147,7 +136,6 @@ for idx, url in enumerate(urls, 1):
         else:
             shutil.copy(media_file, dest)
 
-    # README
     readme = folder_path / "README.md"
     has_pass = "YES" if password else "NO"
     with open(readme, "w") as rf:
@@ -175,7 +163,6 @@ for idx, url in enumerate(urls, 1):
     info_lines.append(f"{filename_no_ext}|{folder}")
     shutil.rmtree(tmp)
 
-# Master README
 master = Path("videos") / "README.md"
 with open(master, "w") as mf:
     mf.write("# RavenTube Downloads\n\n")
@@ -185,7 +172,6 @@ with open(master, "w") as mf:
         fold_enc = fold.replace(" ", "%20")
         mf.write(f"| {i} | {name} | [Open](https://github.com/{repo_owner}/{repo_name}/tree/{branch}/videos/{fold_enc}) |\n")
 
-# Save URLs list
 with open("urls.txt", "w") as uf:
     uf.write("\n".join(urls))
 
