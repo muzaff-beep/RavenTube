@@ -1,0 +1,145 @@
+name: RavenTube - Download
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_urls:
+        description: 'YouTube URLs (space separated) — leave empty to use latest search results'
+        required: false
+        type: string
+      quality:
+        description: 'Quality'
+        required: false
+        default: 'best'
+        type: choice
+        options: [best, 2160, 1080, 720, 480, audio]
+      download_subtitles:
+        description: 'Download subtitles'
+        required: false
+        default: false
+        type: boolean
+      password:
+        description: 'ZIP password'
+        required: false
+        default: ''
+        type: string
+      use_latest_search:
+        description: 'Use URLs from latest search?'
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  download:
+    name: Download and Store
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Get video URLs
+        id: get_urls
+        run: |
+          if [ "${{ github.event.inputs.use_latest_search }}" = "true" ] && [ -f .raventube/latest_search.txt ]; then
+            URLS=$(cat .raventube/latest_search.txt | tr '\n' ' ')
+            echo "Using latest search results:"
+            cat .raventube/latest_search.txt
+          elif [ -n "${{ github.event.inputs.video_urls }}" ]; then
+            URLS="${{ github.event.inputs.video_urls }}"
+          else
+            echo "No URLs provided and no search results found."
+            exit 1
+          fi
+          echo "urls=$URLS" >> $GITHUB_OUTPUT
+
+      - name: Setup
+        run: |
+          git config user.name "RavenTube-Downloader"
+          git config user.email "dl@raventube"
+          sudo apt-get update
+          sudo apt-get install -y python3-pip ffmpeg zip
+          pip install yt-dlp
+
+      - name: Download videos
+        env:
+          URLS: ${{ steps.get_urls.outputs.urls }}
+          QUALITY: ${{ github.event.inputs.quality }}
+          PASSWORD: ${{ github.event.inputs.password }}
+          SUBS: ${{ github.event.inputs.download_subtitles }}
+        run: |
+          # Format selection
+          if [ "$QUALITY" = "audio" ]; then
+            FORMAT="bestaudio/best"
+          elif [ "$QUALITY" = "best" ]; then
+            FORMAT="bestvideo+bestaudio/best"
+          else
+            FORMAT="bestvideo[height<="${QUALITY}"]+bestaudio/best"
+          fi
+
+          mkdir -p videos
+          SUCCESS_COUNT=0
+
+          for URL in $URLS; do
+            echo "Downloading: $URL"
+            # Try up to 3 times
+            for i in 1 2 3; do
+              if yt-dlp -f "$FORMAT" \
+                --merge-output-format mp4 \
+                --write-thumbnail \
+                --convert-thumbnails jpg \
+                --output "videos/%(title)s.%(ext)s" \
+                --no-playlist \
+                --retries 5 \
+                "$URL"; then
+                SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+                break
+              fi
+              sleep 5
+            done
+          done
+
+          echo "Downloaded $SUCCESS_COUNT videos"
+
+          # Password protect
+          if [ -n "$PASSWORD" ]; then
+            for file in videos/*.mp4 videos/*.webm; do
+              [ -f "$file" ] || continue
+              zip -P "$PASSWORD" "${file}.zip" "$file"
+              rm "$file"
+            done
+          fi
+
+          # Generate master README
+          {
+            echo "# RavenTube - Downloaded Videos"
+            echo ""
+            echo "| # | Video |"
+            echo "|---|-------|"
+            NUM=0
+            for folder in videos/*/; do
+              [ -d "$folder" ] || continue
+              NUM=$((NUM+1))
+              NAME=$(basename "$folder")
+              echo "| $NUM | [$NAME]($NAME/) |"
+            done
+          } > videos/README.md
+
+      - name: Push to repository
+        run: |
+          git add videos/
+          git diff --cached --quiet || git commit -m "RavenTube: downloaded videos [skip ci]"
+          git push
+
+      - name: Cleanup search results (optional)
+        if: always()
+        run: |
+          # Optionally clear search results after download
+          # rm -f .raventube/latest_search.txt
+          echo "Download complete. To clear search results, run manually."
