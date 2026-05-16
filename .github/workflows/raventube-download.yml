@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       video_urls:
-        description: 'YouTube URLs (space separated) — leave empty to use latest search results'
+        description: 'YouTube URLs (space separated) — leave empty to use latest search'
         required: false
         type: string
       quality:
@@ -24,10 +24,15 @@ on:
         default: ''
         type: string
       use_latest_search:
-        description: 'Use URLs from latest search?'
+        description: 'Use URLs from latest search (filtered results only)'
         required: false
         default: true
         type: boolean
+      max_videos:
+        description: 'Maximum videos to download (0 = all)'
+        required: false
+        default: '0'
+        type: string
 
 jobs:
   download:
@@ -47,10 +52,15 @@ jobs:
       - name: Get video URLs
         id: get_urls
         run: |
-          if [ "${{ github.event.inputs.use_latest_search }}" = "true" ] && [ -f .raventube/latest_search.txt ]; then
-            URLS=$(cat .raventube/latest_search.txt | tr '\n' ' ')
-            echo "Using latest search results:"
-            cat .raventube/latest_search.txt
+          if [ "${{ github.event.inputs.use_latest_search }}" = "true" ] && [ -f .raventube/latest_urls.txt ]; then
+            MAX="${{ github.event.inputs.max_videos }}"
+            if [ "$MAX" != "0" ]; then
+              URLS=$(head -"$MAX" .raventube/latest_urls.txt | tr '\n' ' ')
+            else
+              URLS=$(cat .raventube/latest_urls.txt | tr '\n' ' ')
+            fi
+            echo "Using latest search results ($(echo $URLS | wc -w) videos):"
+            echo "$URLS"
           elif [ -n "${{ github.event.inputs.video_urls }}" ]; then
             URLS="${{ github.event.inputs.video_urls }}"
           else
@@ -72,9 +82,7 @@ jobs:
           URLS: ${{ steps.get_urls.outputs.urls }}
           QUALITY: ${{ github.event.inputs.quality }}
           PASSWORD: ${{ github.event.inputs.password }}
-          SUBS: ${{ github.event.inputs.download_subtitles }}
         run: |
-          # Format selection
           if [ "$QUALITY" = "audio" ]; then
             FORMAT="bestaudio/best"
           elif [ "$QUALITY" = "best" ]; then
@@ -84,28 +92,29 @@ jobs:
           fi
 
           mkdir -p videos
-          SUCCESS_COUNT=0
+          mkdir -p download_log
+          SUCCESS=0
+          FAILED=0
 
           for URL in $URLS; do
             echo "Downloading: $URL"
-            # Try up to 3 times
-            for i in 1 2 3; do
-              if yt-dlp -f "$FORMAT" \
-                --merge-output-format mp4 \
-                --write-thumbnail \
-                --convert-thumbnails jpg \
-                --output "videos/%(title)s.%(ext)s" \
-                --no-playlist \
-                --retries 5 \
-                "$URL"; then
-                SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-                break
-              fi
-              sleep 5
-            done
+            if yt-dlp -f "$FORMAT" \
+              --merge-output-format mp4 \
+              --write-thumbnail \
+              --convert-thumbnails jpg \
+              --output "videos/%(title)s.%(ext)s" \
+              --no-playlist \
+              --retries 5 \
+              "$URL"; then
+              SUCCESS=$((SUCCESS + 1))
+              echo "$URL|SUCCESS" >> download_log/results.txt
+            else
+              FAILED=$((FAILED + 1))
+              echo "$URL|FAILED" >> download_log/results.txt
+            fi
           done
 
-          echo "Downloaded $SUCCESS_COUNT videos"
+          echo "✅ Downloaded: $SUCCESS | ❌ Failed: $FAILED"
 
           # Password protect
           if [ -n "$PASSWORD" ]; then
@@ -116,30 +125,8 @@ jobs:
             done
           fi
 
-          # Generate master README
-          {
-            echo "# RavenTube - Downloaded Videos"
-            echo ""
-            echo "| # | Video |"
-            echo "|---|-------|"
-            NUM=0
-            for folder in videos/*/; do
-              [ -d "$folder" ] || continue
-              NUM=$((NUM+1))
-              NAME=$(basename "$folder")
-              echo "| $NUM | [$NAME]($NAME/) |"
-            done
-          } > videos/README.md
-
       - name: Push to repository
         run: |
-          git add videos/
-          git diff --cached --quiet || git commit -m "RavenTube: downloaded videos [skip ci]"
+          git add videos/ download_log/
+          git diff --cached --quiet || git commit -m "RavenTube: downloaded videos ($SUCCESS success, $FAILED failed) [skip ci]"
           git push
-
-      - name: Cleanup search results (optional)
-        if: always()
-        run: |
-          # Optionally clear search results after download
-          # rm -f .raventube/latest_search.txt
-          echo "Download complete. To clear search results, run manually."
