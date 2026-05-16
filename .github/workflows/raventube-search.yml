@@ -1,22 +1,64 @@
-name: RavenTube - Search
+name: RavenTube - Advanced Search
 
 on:
   workflow_dispatch:
     inputs:
       search_query:
-        description: 'Search phrase (e.g., "python tutorial" or "ytsearch10:music")'
+        description: 'Search phrase (e.g., "python tutorial" or "machine learning")'
         required: true
         type: string
       max_results:
         description: 'Maximum number of results'
         required: false
-        default: '5'
+        default: '10'
         type: choice
-        options: [1, 3, 5, 10, 20]
+        options: [5, 10, 20, 30, 50]
+      sort_by:
+        description: 'Sort results by'
+        required: false
+        default: 'relevance'
+        type: choice
+        options:
+          - relevance
+          - upload_date
+          - view_count
+          - like_count
+          - duration
+      publish_time:
+        description: 'Upload date filter'
+        required: false
+        default: 'any'
+        type: choice
+        options:
+          - any
+          - today
+          - this_week
+          - this_month
+          - this_year
+      min_views:
+        description: 'Minimum views (e.g., 1000000 for 1M)'
+        required: false
+        default: '0'
+        type: string
+      min_likes:
+        description: 'Minimum likes'
+        required: false
+        default: '0'
+        type: string
+      max_duration:
+        description: 'Maximum duration in seconds (0 = unlimited)'
+        required: false
+        default: '0'
+        type: string
+      min_duration:
+        description: 'Minimum duration in seconds'
+        required: false
+        default: '0'
+        type: string
 
 jobs:
-  search:
-    name: Search YouTube
+  advanced_search:
+    name: Advanced YouTube Search
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -28,35 +70,159 @@ jobs:
           fetch-depth: 0
 
       - name: Install yt-dlp
-        run: pip install yt-dlp
-
-      - name: Perform search
         run: |
-          SEARCH="${{ github.event.inputs.search_query }}"
+          sudo apt-get update
+          sudo apt-get install -y python3-pip
+          pip install yt-dlp
+
+      - name: Perform advanced search
+        run: |
+          QUERY="${{ github.event.inputs.search_query }}"
           MAX="${{ github.event.inputs.max_results }}"
+          SORT="${{ github.event.inputs.sort_by }}"
+          TIME_FILTER="${{ github.event.inputs.publish_time }}"
+          MIN_VIEWS="${{ github.event.inputs.min_views }}"
+          MIN_LIKES="${{ github.event.inputs.min_likes }}"
+          MAX_DUR="${{ github.event.inputs.max_duration }}"
+          MIN_DUR="${{ github.event.inputs.min_duration }}"
 
-          # Ensure ytsearch format
-          if [[ ! "$SEARCH" =~ ^ytsearch[0-9]*: ]]; then
-            SEARCH="ytsearch${MAX}:${SEARCH}"
-          fi
+          # Build search query
+          SEARCH="ytsearch${MAX}:${QUERY}"
 
-          # Get video IDs and titles
-          yt-dlp --flat-playlist --print "%(id)s|%(title)s" "$SEARCH" | head -"$MAX" > search_results.txt
+          # Add date filter
+          case "$TIME_FILTER" in
+            "today")       SEARCH="${SEARCH} after:today" ;;
+            "this_week")   SEARCH="${SEARCH} after:week" ;;
+            "this_month")  SEARCH="${SEARCH} after:month" ;;
+            "this_year")   SEARCH="${SEARCH} after:year" ;;
+          esac
 
-          echo "Found $(wc -l < search_results.txt) videos:"
-          cat search_results.txt
+          echo "Searching: $SEARCH"
+          echo ""
 
-          # Create URLs file
-          while IFS='|' read -r id title; do
-            echo "https://youtube.com/watch?v=$id" >> video_urls.txt
-          done < search_results.txt
+          # Fetch detailed metadata
+          yt-dlp --flat-playlist \
+            --print "%(id)s|%(title)s|%(channel)s|%(upload_date)s|%(view_count)s|%(like_count)s|%(duration)s|%(webpage_url)s" \
+            "$SEARCH" 2>/dev/null | head -"$MAX" > raw_results.txt
 
-      - name: Save results
+          # Create CSV header
+          echo "ID|Title|Channel|Upload Date|Views|Likes|Duration (sec)|URL|Selected" > search_results.csv
+
+          # Filter and process results
+          while IFS='|' read -r id title channel upload_date views likes duration url; do
+            # Convert empty values to 0
+            views=${views:-0}
+            likes=${likes:-0}
+            duration=${duration:-0}
+
+            # Apply filters
+            INCLUDE=true
+
+            if [ "$MIN_VIEWS" != "0" ] && [ "$views" -lt "$MIN_VIEWS" ]; then
+              INCLUDE=false
+            fi
+
+            if [ "$MIN_LIKES" != "0" ] && [ "$likes" -lt "$MIN_LIKES" ]; then
+              INCLUDE=false
+            fi
+
+            if [ "$MAX_DUR" != "0" ] && [ "$duration" -gt "$MAX_DUR" ]; then
+              INCLUDE=false
+            fi
+
+            if [ "$MIN_DUR" != "0" ] && [ "$duration" -lt "$MIN_DUR" ]; then
+              INCLUDE=false
+            fi
+
+            # Format upload date
+            if [ ${#upload_date} -eq 8 ]; then
+              formatted_date="${upload_date:0:4}-${upload_date:4:2}-${upload_date:6:2}"
+            else
+              formatted_date="$upload_date"
+            fi
+
+            # Format duration
+            if [ "$duration" -gt 0 ]; then
+              hours=$((duration / 3600))
+              minutes=$(((duration % 3600) / 60))
+              seconds=$((duration % 60))
+              if [ "$hours" -gt 0 ]; then
+                duration_fmt="${hours}h ${minutes}m ${seconds}s"
+              elif [ "$minutes" -gt 0 ]; then
+                duration_fmt="${minutes}m ${seconds}s"
+              else
+                duration_fmt="${seconds}s"
+              fi
+            else
+              duration_fmt="Unknown"
+            fi
+
+            # Format views
+            if [ "$views" -ge 1000000 ]; then
+              views_fmt="$((views / 1000000)).$(((views % 1000000) / 100000))M"
+            elif [ "$views" -ge 1000 ]; then
+              views_fmt="$((views / 1000)).$(((views % 1000) / 100))K"
+            else
+              views_fmt="$views"
+            fi
+
+            # Format likes
+            if [ "$likes" -ge 1000000 ]; then
+              likes_fmt="$((likes / 1000000)).$(((likes % 1000000) / 100000))M"
+            elif [ "$likes" -ge 1000 ]; then
+              likes_fmt="$((likes / 1000)).$(((likes % 1000) / 100))K"
+            else
+              likes_fmt="$likes"
+            fi
+
+            SELECTED=""
+            if [ "$INCLUDE" = true ]; then
+              SELECTED="YES"
+            fi
+
+            echo "$id|$title|$channel|$formatted_date|$views_fmt ($views)|$likes_fmt ($likes)|$duration_fmt ($duration sec)|$url|$SELECTED" >> search_results.csv
+          done < raw_results.txt
+
+          echo ""
+          echo "=========================================="
+          echo "Search complete! Results saved to search_results.csv"
+          echo "=========================================="
+          echo ""
+
+          # Display summary
+          echo "📊 RESULTS SUMMARY:"
+          echo "-------------------"
+          cat search_results.csv | column -t -s '|'
+
+          # Create a clean URL list for download (only selected/filtered items)
+          grep "|YES$" search_results.csv | cut -d'|' -f8 > selected_urls.txt
+
+          echo ""
+          echo "✅ Filtered URLs saved to selected_urls.txt (for RavenTube-Download)"
+
+      - name: Save search results (single file)
         run: |
           mkdir -p .raventube
-          cp video_urls.txt .raventube/latest_search.txt
-          echo "${{ github.event.inputs.search_query }}" > .raventube/last_query.txt
-          date -u > .raventube/search_timestamp.txt
+
+          # Copy only the CSV results (no extra timestamp files)
+          cp search_results.csv .raventube/latest_search.csv
+
+          # Also save just the URLs for download workflow
+          cp selected_urls.txt .raventube/latest_urls.txt
+
+          # Save the search parameters for reference
+          cat > .raventube/search_params.txt << EOF
+          Query: ${{ github.event.inputs.search_query }}
+          Date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          Max Results: ${{ github.event.inputs.max_results }}
+          Sort By: ${{ github.event.inputs.sort_by }}
+          Time Filter: ${{ github.event.inputs.publish_time }}
+          Min Views: ${{ github.event.inputs.min_views }}
+          Min Likes: ${{ github.event.inputs.min_likes }}
+          Duration Range: ${{ github.event.inputs.min_duration }} - ${{ github.event.inputs.max_duration }} seconds
+          Total Results Found: $(grep -c "|" .raventube/latest_search.csv)
+          Filtered Results: $(grep -c "|YES$" .raventube/latest_search.csv)
+          EOF
 
       - name: Commit search results
         run: |
@@ -66,7 +232,11 @@ jobs:
           git diff --cached --quiet || git commit -m "RavenTube: search results for '${{ github.event.inputs.search_query }}' [skip ci]"
           git push
 
-      - name: Output URLs (for manual use)
+      - name: Output download ready URLs
         run: |
-          echo "::set-output name=urls::$(cat video_urls.txt | tr '\n' ' ')"
-          echo "URLs saved to .raventube/latest_search.txt"
+          echo ""
+          echo "🎯 READY FOR DOWNLOAD:"
+          echo "======================"
+          cat selected_urls.txt
+          echo ""
+          echo "Run 'RavenTube - Download' workflow with 'use_latest_search: true'"
