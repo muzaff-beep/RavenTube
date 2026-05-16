@@ -1,12 +1,11 @@
 {
   "settings": {
-    "quality": "1080",
-    "subtitles": true,
+    "quality": "480",
+    "subtitles": false,
     "mp3": false,
-    "password": "optional-zip-password"
+    "password": ""
   },
   "videos": [
-    "https://www.youtube.com/watch?v=add64uypsko",
-    "https://youtu.be/3gERpRvmgys"
+    "https://www.youtube.com/watch?v=3lTk2SOHeVM"
   ]
 }
