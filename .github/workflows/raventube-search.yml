@@ -1,64 +1,34 @@
-name: RavenTube - Advanced Search
+name: RavenTube - Advanced Search (HTML Output)
 
 on:
   workflow_dispatch:
     inputs:
       search_query:
-        description: 'Search phrase (e.g., "python tutorial" or "machine learning")'
+        description: 'Search phrase (e.g., "python tutorial")'
         required: true
         type: string
       max_results:
-        description: 'Maximum number of results'
+        description: 'Maximum results'
         required: false
         default: '10'
         type: choice
         options: [5, 10, 20, 30, 50]
       sort_by:
-        description: 'Sort results by'
+        description: 'Sort by'
         required: false
         default: 'relevance'
         type: choice
-        options:
-          - relevance
-          - upload_date
-          - view_count
-          - like_count
-          - duration
+        options: [relevance, upload_date, view_count, like_count, duration]
       publish_time:
         description: 'Upload date filter'
         required: false
         default: 'any'
         type: choice
-        options:
-          - any
-          - today
-          - this_week
-          - this_month
-          - this_year
-      min_views:
-        description: 'Minimum views (e.g., 1000000 for 1M)'
-        required: false
-        default: '0'
-        type: string
-      min_likes:
-        description: 'Minimum likes'
-        required: false
-        default: '0'
-        type: string
-      max_duration:
-        description: 'Maximum duration in seconds (0 = unlimited)'
-        required: false
-        default: '0'
-        type: string
-      min_duration:
-        description: 'Minimum duration in seconds'
-        required: false
-        default: '0'
-        type: string
+        options: [any, today, this_week, this_month, this_year]
 
 jobs:
-  advanced_search:
-    name: Advanced YouTube Search
+  html_search:
+    name: Search & Generate HTML Report
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -69,174 +39,229 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install yt-dlp
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y python3-pip
           pip install yt-dlp
 
-      - name: Perform advanced search
+      - name: Perform search and fetch thumbnails
+        id: search
         run: |
           QUERY="${{ github.event.inputs.search_query }}"
           MAX="${{ github.event.inputs.max_results }}"
           SORT="${{ github.event.inputs.sort_by }}"
-          TIME_FILTER="${{ github.event.inputs.publish_time }}"
-          MIN_VIEWS="${{ github.event.inputs.min_views }}"
-          MIN_LIKES="${{ github.event.inputs.min_likes }}"
-          MAX_DUR="${{ github.event.inputs.max_duration }}"
-          MIN_DUR="${{ github.event.inputs.min_duration }}"
+          TIME="${{ github.event.inputs.publish_time }}"
 
-          # Build search query
+          # Build yt-dlp search query
           SEARCH="ytsearch${MAX}:${QUERY}"
+          [[ "$TIME" != "any" ]] && SEARCH="${SEARCH} after:${TIME}"
 
-          # Add date filter
-          case "$TIME_FILTER" in
-            "today")       SEARCH="${SEARCH} after:today" ;;
-            "this_week")   SEARCH="${SEARCH} after:week" ;;
-            "this_month")  SEARCH="${SEARCH} after:month" ;;
-            "this_year")   SEARCH="${SEARCH} after:year" ;;
-          esac
-
-          echo "Searching: $SEARCH"
-          echo ""
-
-          # Fetch detailed metadata
+          # Fetch full metadata including thumbnails
           yt-dlp --flat-playlist \
-            --print "%(id)s|%(title)s|%(channel)s|%(upload_date)s|%(view_count)s|%(like_count)s|%(duration)s|%(webpage_url)s" \
-            "$SEARCH" 2>/dev/null | head -"$MAX" > raw_results.txt
+            --print "%(id)s|%(title)s|%(channel)s|%(upload_date)s|%(view_count)s|%(like_count)s|%(duration)s|%(thumbnail)s|%(webpage_url)s" \
+            "$SEARCH" > raw_data.txt
 
-          # Create CSV header
-          echo "ID|Title|Channel|Upload Date|Views|Likes|Duration (sec)|URL|Selected" > search_results.csv
+          # Generate HTML file
+          cat > search_results.html << 'HTML_HEAD'
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RavenTube Search Results</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #eee;
+            padding: 20px;
+        }
+        .container { max-width: 1400px; margin: 0 auto; }
+        h1 {
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 2.5rem;
+            background: linear-gradient(45deg, #ff6b6b, #4ecdc4);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+        }
+        .query-badge {
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 1.2rem;
+            color: #aaa;
+        }
+        .video-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 25px;
+        }
+        .video-card {
+            background: rgba(255,255,255,0.08);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            overflow: hidden;
+            transition: transform 0.3s, box-shadow 0.3s;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .video-card:hover {
+            transform: translateY(-8px);
+            box-shadow: 0 15px 30px rgba(0,0,0,0.4);
+            border-color: #4ecdc4;
+        }
+        .thumbnail {
+            width: 100%;
+            height: 180px;
+            object-fit: cover;
+            background: #0a0a1a;
+        }
+        .info {
+            padding: 15px;
+        }
+        .title {
+            font-size: 1.1rem;
+            font-weight: bold;
+            margin-bottom: 8px;
+            color: #4ecdc4;
+            text-decoration: none;
+            display: block;
+        }
+        .title:hover { text-decoration: underline; }
+        .channel {
+            color: #ff6b6b;
+            font-size: 0.85rem;
+            margin-bottom: 8px;
+        }
+        .stats {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            font-size: 0.75rem;
+            color: #ccc;
+            margin: 10px 0;
+        }
+        .stat { background: rgba(0,0,0,0.4); padding: 3px 8px; border-radius: 20px; }
+        .duration { background: rgba(78,205,196,0.2); }
+        .views { background: rgba(255,107,107,0.2); }
+        .likes { background: rgba(78,205,196,0.2); }
+        .date { background: rgba(255,193,7,0.2); }
+        .download-btn {
+            display: inline-block;
+            background: linear-gradient(45deg, #ff6b6b, #c92a2a);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 25px;
+            text-decoration: none;
+            font-size: 0.8rem;
+            margin-top: 10px;
+            transition: opacity 0.2s;
+        }
+        .download-btn:hover { opacity: 0.8; }
+        .footer {
+            text-align: center;
+            margin-top: 40px;
+            padding: 20px;
+            color: #666;
+            font-size: 0.8rem;
+        }
+        @media (max-width: 700px) {
+            .video-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>🪶 RavenTube Search Results</h1>
+    <div class="query-badge">
+        🔍 <strong>SEARCH_QUERY_PLACEHOLDER</strong> &nbsp;|&nbsp;
+        📅 SEARCH_DATE_PLACEHOLDER &nbsp;|&nbsp;
+        🎯 RESULTS_COUNT_PLACEHOLDER videos
+    </div>
+    <div class="video-grid">
+HTML_HEAD
 
-          # Filter and process results
-          while IFS='|' read -r id title channel upload_date views likes duration url; do
-            # Convert empty values to 0
-            views=${views:-0}
-            likes=${likes:-0}
-            duration=${duration:-0}
+          # Replace placeholders
+          sed -i "s|SEARCH_QUERY_PLACEHOLDER|$QUERY|g" search_results.html
+          sed -i "s|SEARCH_DATE_PLACEHOLDER|$(date -u '+%Y-%m-%d %H:%M UTC')|g" search_results.html
 
-            # Apply filters
-            INCLUDE=true
-
-            if [ "$MIN_VIEWS" != "0" ] && [ "$views" -lt "$MIN_VIEWS" ]; then
-              INCLUDE=false
-            fi
-
-            if [ "$MIN_LIKES" != "0" ] && [ "$likes" -lt "$MIN_LIKES" ]; then
-              INCLUDE=false
-            fi
-
-            if [ "$MAX_DUR" != "0" ] && [ "$duration" -gt "$MAX_DUR" ]; then
-              INCLUDE=false
-            fi
-
-            if [ "$MIN_DUR" != "0" ] && [ "$duration" -lt "$MIN_DUR" ]; then
-              INCLUDE=false
-            fi
-
-            # Format upload date
-            if [ ${#upload_date} -eq 8 ]; then
-              formatted_date="${upload_date:0:4}-${upload_date:4:2}-${upload_date:6:2}"
-            else
-              formatted_date="$upload_date"
-            fi
-
+          # Append each video card
+          COUNT=0
+          while IFS='|' read -r id title channel upload_date views likes duration thumb url; do
+            COUNT=$((COUNT+1))
+            # Format numbers
+            views_fmt=$(echo "$views" | awk '{if($1>=1000000) printf "%.1fM", $1/1000000; else if($1>=1000) printf "%.1fK", $1/1000; else print $1}')
+            likes_fmt=$(echo "$likes" | awk '{if($1>=1000000) printf "%.1fM", $1/1000000; else if($1>=1000) printf "%.1fK", $1/1000; else print $1}')
             # Format duration
-            if [ "$duration" -gt 0 ]; then
-              hours=$((duration / 3600))
-              minutes=$(((duration % 3600) / 60))
-              seconds=$((duration % 60))
-              if [ "$hours" -gt 0 ]; then
-                duration_fmt="${hours}h ${minutes}m ${seconds}s"
-              elif [ "$minutes" -gt 0 ]; then
-                duration_fmt="${minutes}m ${seconds}s"
-              else
-                duration_fmt="${seconds}s"
-              fi
+            dur_min=$((duration / 60))
+            dur_sec=$((duration % 60))
+            duration_fmt="${dur_min}:$(printf "%02d" $dur_sec)"
+            # Format date
+            if [ ${#upload_date} -eq 8 ]; then
+              date_fmt="${upload_date:0:4}-${upload_date:4:2}-${upload_date:6:2}"
             else
-              duration_fmt="Unknown"
+              date_fmt="$upload_date"
             fi
 
-            # Format views
-            if [ "$views" -ge 1000000 ]; then
-              views_fmt="$((views / 1000000)).$(((views % 1000000) / 100000))M"
-            elif [ "$views" -ge 1000 ]; then
-              views_fmt="$((views / 1000)).$(((views % 1000) / 100))K"
-            else
-              views_fmt="$views"
-            fi
+            cat >> search_results.html << CARD
+        <div class="video-card">
+            <img class="thumbnail" src="$thumb" alt="Thumbnail" onerror="this.src='https://via.placeholder.com/320x180?text=No+Thumb'">
+            <div class="info">
+                <a href="$url" target="_blank" class="title">$title</a>
+                <div class="channel">📺 $channel</div>
+                <div class="stats">
+                    <span class="stat duration">⏱️ $duration_fmt</span>
+                    <span class="stat views">👁️ $views_fmt</span>
+                    <span class="stat likes">❤️ $likes_fmt</span>
+                    <span class="stat date">📅 $date_fmt</span>
+                </div>
+                <a href="$url" target="_blank" class="download-btn">▶️ Watch on YouTube</a>
+            </div>
+        </div>
+CARD
+          done < raw_data.txt
 
-            # Format likes
-            if [ "$likes" -ge 1000000 ]; then
-              likes_fmt="$((likes / 1000000)).$(((likes % 1000000) / 100000))M"
-            elif [ "$likes" -ge 1000 ]; then
-              likes_fmt="$((likes / 1000)).$(((likes % 1000) / 100))K"
-            else
-              likes_fmt="$likes"
-            fi
+          # Close HTML
+          cat >> search_results.html << 'HTML_TAIL'
+    </div>
+    <div class="footer">
+        🐦‍⬛ RavenTube — Free YouTube Search & Download<br>
+        Generated by GitHub Actions
+    </div>
+</div>
+</body>
+</html>
+HTML_TAIL
 
-            SELECTED=""
-            if [ "$INCLUDE" = true ]; then
-              SELECTED="YES"
-            fi
+          # Update results count
+          sed -i "s|RESULTS_COUNT_PLACEHOLDER|$COUNT|g" search_results.html
 
-            echo "$id|$title|$channel|$formatted_date|$views_fmt ($views)|$likes_fmt ($likes)|$duration_fmt ($duration sec)|$url|$SELECTED" >> search_results.csv
-          done < raw_results.txt
+          # Also extract clean URLs for download
+          grep -E 'https?://www\.youtube\.com/watch\?v=' raw_data.txt | cut -d'|' -f9 > selected_urls.txt
 
-          echo ""
-          echo "=========================================="
-          echo "Search complete! Results saved to search_results.csv"
-          echo "=========================================="
-          echo ""
+          echo "✅ HTML report generated: search_results.html"
+          echo "✅ URL list saved: selected_urls.txt"
 
-          # Display summary
-          echo "📊 RESULTS SUMMARY:"
-          echo "-------------------"
-          cat search_results.csv | column -t -s '|'
-
-          # Create a clean URL list for download (only selected/filtered items)
-          grep "|YES$" search_results.csv | cut -d'|' -f8 > selected_urls.txt
-
-          echo ""
-          echo "✅ Filtered URLs saved to selected_urls.txt (for RavenTube-Download)"
-
-      - name: Save search results (single file)
+      - name: Save to repository
         run: |
           mkdir -p .raventube
-
-          # Copy only the CSV results (no extra timestamp files)
-          cp search_results.csv .raventube/latest_search.csv
-
-          # Also save just the URLs for download workflow
+          # Move HTML to a well-known location
+          cp search_results.html .raventube/latest_search.html
           cp selected_urls.txt .raventube/latest_urls.txt
+          # Also copy to root for easy access
+          cp search_results.html index.html
 
-          # Save the search parameters for reference
-          cat > .raventube/search_params.txt << EOF
-          Query: ${{ github.event.inputs.search_query }}
-          Date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
-          Max Results: ${{ github.event.inputs.max_results }}
-          Sort By: ${{ github.event.inputs.sort_by }}
-          Time Filter: ${{ github.event.inputs.publish_time }}
-          Min Views: ${{ github.event.inputs.min_views }}
-          Min Likes: ${{ github.event.inputs.min_likes }}
-          Duration Range: ${{ github.event.inputs.min_duration }} - ${{ github.event.inputs.max_duration }} seconds
-          Total Results Found: $(grep -c "|" .raventube/latest_search.csv)
-          Filtered Results: $(grep -c "|YES$" .raventube/latest_search.csv)
-          EOF
-
-      - name: Commit search results
-        run: |
           git config user.name "RavenTube-Search"
           git config user.email "search@raventube"
-          git add .raventube/
-          git diff --cached --quiet || git commit -m "RavenTube: search results for '${{ github.event.inputs.search_query }}' [skip ci]"
+          git add .raventube/ index.html
+          git diff --cached --quiet || git commit -m "RavenTube: HTML search results for '${{ github.event.inputs.search_query }}' [skip ci]"
           git push
 
-      - name: Output download ready URLs
+      - name: Show summary
         run: |
-          echo ""
-          echo "🎯 READY FOR DOWNLOAD:"
-          echo "======================"
-          cat selected_urls.txt
-          echo ""
-          echo "Run 'RavenTube - Download' workflow with 'use_latest_search: true'"
+          echo "=========================================="
+          echo "🎉 Search complete!"
+          echo "📄 HTML report: https://github.com/${{ github.repository }}/blob/main/index.html"
+          echo "=========================================="
