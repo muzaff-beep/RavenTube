@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-steps:
+    steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -92,3 +92,4 @@ steps:
           echo "=========================================="
           echo "Done: https://github.com/${{ github.repository }}/blob/main/index.html"
           echo "=========================================="
+          
