@@ -45,7 +45,7 @@ jobs:
           sudo apt-get install -y python3-pip
           pip install yt-dlp
 
-      - name: Perform search and generate HTML
+      - name: Search and generate HTML
         env:
           QUERY: ${{ github.event.inputs.search_query }}
           MAX: ${{ github.event.inputs.max_results }}
@@ -54,262 +54,62 @@ jobs:
         run: |
           FILTERS=""
           case "$TIME" in
-            today)      FILTERS=":today" ;;
-            this_week)  FILTERS=":week" ;;
+            today) FILTERS=":today" ;;
+            this_week) FILTERS=":week" ;;
             this_month) FILTERS=":month" ;;
-            this_year)  FILTERS=":year" ;;
+            this_year) FILTERS=":year" ;;
           esac
           SORT_FLAG=""
           if [ "$SORT" != "relevance" ]; then
             SORT_FLAG=":sort=$SORT"
           fi
-          SEARCH_STR="ytsearch${MAX}:${QUERY}${FILTERS}${SORT_FLAG}"
-          echo "Search string: $SEARCH_STR"
-          yt-dlp --dump-json --no-playlist --skip-download --no-warnings --no-check-certificate "$SEARCH_STR" > raw.json
+          yt-dlp --dump-json --no-playlist --skip-download --no-warnings --no-check-certificate "ytsearch${MAX}:${QUERY}${FILTERS}${SORT_FLAG}" > raw.json
 
-          cat > build_html.py << 'PYEOF'
-import json, datetime, html, os, sys
+          cat > build.py << 'PYEOF'
+import json, os
 
-search_query = os.environ.get("QUERY", "")
-generated_at = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+query = os.environ["QUERY"]
+now = os.popen("date -u '+%Y-%m-%d %H:%M UTC'").read().strip()
+rows = ""
 
-def fmt_num(n):
-    try:
-        n = int(n)
-    except:
-        return "0"
-    if n >= 1_000_000:
-        return f"{n/1_000_000:.1f}M"
-    if n >= 1_000:
-        return f"{n/1_000:.1f}K"
-    return str(n)
+with open("raw.json") as f:
+    for i, line in enumerate(f, 1):
+        v = json.loads(line.strip())
+        title = v.get("title","?")
+        dur = int(v.get("duration") or 0)
+        views = int(v.get("view_count") or 0)
+        date = (v.get("upload_date") or "")[:10]
+        url = v.get("webpage_url") or f"https://youtu.be/{v.get('id','')}"
+        rows += f'<tr><td>{i}</td><td><a href="{url}">{title}</a></td><td>{date}</td><td>{views:,}</td><td>{dur//60}:{dur%60:02d}</td></tr>\n'
 
-cards = []
-with open("raw.json", "r", encoding="utf-8") as f:
-    for line in f:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            vid = json.loads(line)
-        except:
-            continue
-        vid_id = vid.get("id", "")
-        title = vid.get("title", "Untitled")
-        channel = vid.get("channel", "Unknown")
-        upload_date = vid.get("upload_date", "")
-        view_count = vid.get("view_count") or 0
-        like_count = vid.get("like_count") or 0
-        duration = vid.get("duration") or 0
-        thumbnail = vid.get("thumbnail", "")
-        webpage_url = vid.get("webpage_url", "")
-        if not webpage_url and vid_id:
-            webpage_url = "https://www.youtube.com/watch?v=" + vid_id
+html = f'''<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>RavenTube: {query}</title>
+<style>body{{font:14px/1.4 monospace;background:#111;color:#ccc;padding:20px}}h1{{color:#4ecdc4}}table{{border-collapse:collapse;width:100%}}th,td{{border:1px solid #333;padding:6px 10px;text-align:left}}th{{background:#222}}a{{color:#ff6b6b}}</style></head><body>
+<h1>RavenTube: {query}</h1><p>{now} — {i} results</p>
+<table><tr><th>#</th><th>Title</th><th>Date</th><th>Views</th><th>Dur</th></tr>{rows}</table></body></html>'''
 
-        try:
-            if len(upload_date) == 8:
-                date_fmt = upload_date[:4] + "-" + upload_date[4:6] + "-" + upload_date[6:8]
-            else:
-                date_fmt = upload_date
-        except:
-            date_fmt = "N/A"
+with open("index.html","w") as f: f.write(html)
 
-        views_fmt = fmt_num(view_count)
-        likes_fmt = fmt_num(like_count)
-
-        try:
-            d = int(duration)
-            mins = d // 60
-            secs = d % 60
-            duration_fmt = str(mins) + ":" + str(secs).zfill(2)
-        except:
-            duration_fmt = "?"
-
-        title_esc = html.escape(title)
-        channel_esc = html.escape(channel)
-        url_esc = html.escape(webpage_url)
-        thumb_esc = html.escape(thumbnail)
-
-        card = '        <div class="video-card">\n'
-        card += '            <img class="thumbnail" src="' + thumb_esc + '" alt="Thumbnail" onerror="this.src=\'https://via.placeholder.com/320x180?text=No+Thumb\'">\n'
-        card += '            <div class="info">\n'
-        card += '                <a href="' + url_esc + '" target="_blank" class="title">' + title_esc + '</a>\n'
-        card += '                <div class="channel">📺 ' + channel_esc + '</div>\n'
-        card += '                <div class="stats">\n'
-        card += '                    <span class="stat duration">⏱️ ' + duration_fmt + '</span>\n'
-        card += '                    <span class="stat views">👁️ ' + views_fmt + '</span>\n'
-        card += '                    <span class="stat likes">❤️ ' + likes_fmt + '</span>\n'
-        card += '                    <span class="stat date">📅 ' + date_fmt + '</span>\n'
-        card += '                </div>\n'
-        card += '                <a href="' + url_esc + '" target="_blank" class="download-btn">▶️ Watch on YouTube</a>\n'
-        card += '            </div>\n'
-        card += '        </div>'
-        cards.append(card)
-
-total = len(cards)
-
-html_head = '''<!DOCTYPE html>
-<html lang="fa" dir="rtl">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RavenTube Search Results</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            color: #eee;
-            padding: 20px;
-        }
-        .container { max-width: 1400px; margin: 0 auto; }
-        h1 {
-            text-align: center;
-            margin-bottom: 10px;
-            font-size: 2.5rem;
-            background: linear-gradient(45deg, #ff6b6b, #4ecdc4);
-            -webkit-background-clip: text;
-            background-clip: text;
-            color: transparent;
-        }
-        .query-badge {
-            text-align: center;
-            margin-bottom: 30px;
-            font-size: 1.2rem;
-            color: #aaa;
-        }
-        .video-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-            gap: 25px;
-        }
-        .video-card {
-            background: rgba(255,255,255,0.08);
-            backdrop-filter: blur(10px);
-            border-radius: 15px;
-            overflow: hidden;
-            transition: transform 0.3s, box-shadow 0.3s;
-            border: 1px solid rgba(255,255,255,0.1);
-        }
-        .video-card:hover {
-            transform: translateY(-8px);
-            box-shadow: 0 15px 30px rgba(0,0,0,0.4);
-            border-color: #4ecdc4;
-        }
-        .thumbnail {
-            width: 100%;
-            height: 180px;
-            object-fit: cover;
-            background: #0a0a1a;
-        }
-        .info {
-            padding: 15px;
-        }
-        .title {
-            font-size: 1.1rem;
-            font-weight: bold;
-            margin-bottom: 8px;
-            color: #4ecdc4;
-            text-decoration: none;
-            display: block;
-        }
-        .title:hover { text-decoration: underline; }
-        .channel {
-            color: #ff6b6b;
-            font-size: 0.85rem;
-            margin-bottom: 8px;
-        }
-        .stats {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 12px;
-            font-size: 0.75rem;
-            color: #ccc;
-            margin: 10px 0;
-        }
-        .stat { background: rgba(0,0,0,0.4); padding: 3px 8px; border-radius: 20px; }
-        .duration { background: rgba(78,205,196,0.2); }
-        .views { background: rgba(255,107,107,0.2); }
-        .likes { background: rgba(78,205,196,0.2); }
-        .date { background: rgba(255,193,7,0.2); }
-        .download-btn {
-            display: inline-block;
-            background: linear-gradient(45deg, #ff6b6b, #c92a2a);
-            color: white;
-            padding: 8px 16px;
-            border-radius: 25px;
-            text-decoration: none;
-            font-size: 0.8rem;
-            margin-top: 10px;
-            transition: opacity 0.2s;
-        }
-        .download-btn:hover { opacity: 0.8; }
-        .footer {
-            text-align: center;
-            margin-top: 40px;
-            padding: 20px;
-            color: #666;
-            font-size: 0.8rem;
-        }
-        @media (max-width: 700px) {
-            .video-grid { grid-template-columns: 1fr; }
-        }
-    </style>
-</head>
-<body>
-<div class="container">
-    <h1>🪶 RavenTube Search Results</h1>
-    <div class="query-badge">
-        🔍 <strong>''' + html.escape(search_query) + '''</strong> &nbsp;|&nbsp;
-        📅 ''' + generated_at + ''' &nbsp;|&nbsp;
-        🎯 ''' + str(total) + ''' videos
-    </div>
-    <div class="video-grid">
-'''
-
-html_tail = '''
-    </div>
-    <div class="footer">
-        🐦‍⬛ RavenTube — Free YouTube Search & Download<br>
-        Generated by GitHub Actions
-    </div>
-</div>
-</body>
-</html>'''
-
-with open("search_results.html", "w", encoding="utf-8") as f:
-    f.write(html_head)
-    f.write("\n".join(cards))
-    f.write(html_tail)
-
-with open("selected_urls.txt", "w") as f:
-    import re
-    for card in cards:
-        match = re.search(r'href="([^"]+)"', card)
-        if match:
-            f.write(match.group(1) + "\n")
-
-print("Generated HTML with " + str(total) + " videos")
+urls = [l.split('"')[3] for l in rows.splitlines() if 'href=' in l]
+with open("urls.txt","w") as f: f.write("\n".join(urls))
 PYEOF
 
-          python3 build_html.py
+          python3 build.py
 
       - name: Save to repository
         run: |
           mkdir -p .raventube
-          cp search_results.html .raventube/latest_search.html
-          cp selected_urls.txt .raventube/latest_urls.txt
-          cp search_results.html index.html
-
-          git config user.name "RavenTube-Search"
-          git config user.email "search@raventube"
-          git add .raventube/ index.html
-          git diff --cached --quiet || git commit -m "RavenTube: HTML search results for '${{ github.event.inputs.search_query }}' [skip ci]"
+          cp index.html .raventube/latest.html
+          cp urls.txt .raventube/urls.txt
+          git config user.name "RavenTube"
+          git config user.email "rt@git.io"
+          git add .raventube/ index.html urls.txt
+          git diff --cached --quiet || git commit -m "Search: $QUERY [skip ci]"
           git push
+        env:
+          QUERY: ${{ github.event.inputs.search_query }}
 
-      - name: Show summary
+      - name: Summary
         run: |
           echo "=========================================="
-          echo "🎉 Search complete!"
-          echo "📄 HTML report: https://github.com/${{ github.repository }}/blob/main/index.html"
+          echo "Done: https://github.com/${{ github.repository }}/blob/main/index.html"
           echo "=========================================="
