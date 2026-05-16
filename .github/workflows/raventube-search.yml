@@ -46,8 +46,8 @@ steps:
 - name: Search YouTube
         env:
           QUERY: ${{ github.event.inputs.search_query }}
-          MAX:   ${{ github.event.inputs.max_results }}
-          TIME:  ${{ github.event.inputs.publish_time }}
+          MAX: ${{ github.event.inputs.max_results }}
+          TIME: ${{ github.event.inputs.publish_time }}
         run: |
           DATE_FLAG=""
           case "$TIME" in
@@ -56,7 +56,7 @@ steps:
             this_month) DATE_FLAG="--dateafter now-1month" ;;
             this_year)  DATE_FLAG="--dateafter now-1year"  ;;
           esac
-yt-dlp \
+          yt-dlp \
             --dump-json \
             --no-playlist \
             --skip-download \
@@ -64,12 +64,12 @@ yt-dlp \
             --ignore-errors \
             $DATE_FLAG \
             "ytsearch${MAX}:${QUERY}" > raw.json || true
-touch raw.json
+          touch raw.json
           echo "Lines fetched: $(wc -l < raw.json)"
 - name: Build HTML report
         env:
           QUERY: ${{ github.event.inputs.search_query }}
-          SORT:  ${{ github.event.inputs.sort_by }}
+          SORT: ${{ github.event.inputs.sort_by }}
         run: python3 .github/scripts/build_report.py
 - name: Commit results
         env:
