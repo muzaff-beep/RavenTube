@@ -58,8 +58,8 @@ for idx, url in enumerate(urls, 1):
         "--no-check-certificates",
         "--no-cache-dir",
         "--js-runtimes", "deno",
-        "--remote-components", "ejs:github",   # fix JS challenges
-        "--output", "%(title)s.%(ext)s"        # no tmp prefix, cwd=tmp handles location
+        "--remote-components", "ejs:github",
+        "--output", "%(title)s.%(ext)s"
     ] + cookies_flag
 
     if is_audio:
@@ -145,41 +145,50 @@ for idx, url in enumerate(urls, 1):
 
     readme = folder_path / "README.md"
     has_pass = "YES" if password else "NO"
-    with open(readme, "w") as rf:
-        rf.write(f"# {filename_no_ext}\n\n")
-        if thumb:
-            rf.write(f'<img src="thumbnail.jpg" width="250"/>\n\n')
-        rf.write(f"| Property | Value |\n|----------|-------|\n")
-        rf.write(f"| **Quality** | {quality} |\n")
-        rf.write(f"| **Size** | {size_mb} MB |\n")
-        rf.write(f"| **Password** | {has_pass} |\n\n")
-        rf.write("## Download Link\n\n")
-        folder_enc = folder.replace(" ", "%20")
-        if split_flag:
-            parts = sorted(glob.glob(f"{folder_path}/{safe_name}.zip*"))
-            rf.write(f"| **Total Size** | {size_mb} MB ({len(parts)} parts) |\n\n")
-            for part_file in parts:
-                pname = os.path.basename(part_file)
-                penc = pname.replace(" ", "%20")
-                rf.write(f"| `{pname}` | [Download](https://raw.githubusercontent.com/{repo_owner}/{repo_name}/{branch}/videos/{folder_enc}/{penc}) |\n")
-        else:
-            fname = f"{safe_name}.{ext}" if not password else f"{safe_name}.zip"
-            fenc = fname.replace(" ", "%20")
-            rf.write(f"| `{fname}` | [Download](https://raw.githubusercontent.com/{repo_owner}/{repo_name}/{branch}/videos/{folder_enc}/{fenc}) |\n")
+    readme_lines = []
+    readme_lines.append(f"# {filename_no_ext}\n")
+    if thumb:
+        readme_lines.append('<img src="thumbnail.jpg" width="250"/>\n')
+    readme_lines.append("| Property | Value |\n")
+    readme_lines.append("|----------|-------|\n")
+    readme_lines.append(f"| **Quality** | {quality} |\n")
+    readme_lines.append(f"| **Size** | {size_mb} MB |\n")
+    readme_lines.append(f"| **Password** | {has_pass} |\n\n")
+    readme_lines.append("## Download Link\n\n")
+    folder_enc = folder.replace(" ", "%20")
+    if split_flag:
+        parts = sorted(glob.glob(f"{folder_path}/{safe_name}.zip*"))
+        readme_lines.append(f"| **Total Size** | {size_mb} MB ({len(parts)} parts) |\n\n")
+        for part_file in parts:
+            pname = os.path.basename(part_file)
+            penc = pname.replace(" ", "%20")
+            readme_lines.append(
+                f"| `{pname}` | [Download](https://raw.githubusercontent.com/{repo_owner}/{repo_name}/{branch}/videos/{folder_enc}/{penc}) |\n"
+            )
+    else:
+        fname = f"{safe_name}.{ext}" if not password else f"{safe_name}.zip"
+        fenc = fname.replace(" ", "%20")
+        readme_lines.append(
+            f"| `{fname}` | [Download](https://raw.githubusercontent.com/{repo_owner}/{repo_name}/{branch}/videos/{folder_enc}/{fenc}) |\n"
+        )
+    with open(readme, "w", encoding="utf-8") as rf:
+        rf.writelines(readme_lines)
 
     info_lines.append(f"{filename_no_ext}|{folder}")
     shutil.rmtree(tmp)
 
 master = Path("videos") / "README.md"
-with open(master, "w") as mf:
-    mf.write("# RavenTube Downloads\n\n")
-    mf.write("| # | Video | Folder |\n|---|---|---|\n")
-    for i, line in enumerate(info_lines, 1):
-        name, fold = line.split("|")
-        fold_enc = fold.replace(" ", "%20")
-        mf.write(f"| {i} | {name} | [Open](https://github.com/{repo_owner}/{repo_name}/tree/{branch}/videos/{fold_enc}) |\n")
+master_lines = ["# RavenTube Downloads\n\n", "| # | Video | Folder |\n|---|---|---|\n"]
+for i, line in enumerate(info_lines, 1):
+    name, fold = line.split("|")
+    fold_enc = fold.replace(" ", "%20")
+    master_lines.append(
+        f"| {i} | {name} | [Open](https://github.com/{repo_owner}/{repo_name}/tree/{branch}/videos/{fold_enc}) |\n"
+    )
+with open(master, "w", encoding="utf-8") as mf:
+    mf.writelines(master_lines)
 
-with open("urls.txt", "w") as uf:
+with open("urls.txt", "w", encoding="utf-8") as uf:
     uf.write("\n".join(urls))
-)
+
 print("\nDone. All files prepared.", flush=True)
